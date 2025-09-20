@@ -1,32 +1,79 @@
-/**
- * Import function triggers from their respective submodules:
- *
- * import {onCall} from "firebase-functions/v2/https";
- * import {onDocumentWritten} from "firebase-functions/v2/firestore";
- *
- * See a full list of supported triggers at https://firebase.google.com/docs/functions
- */
+import { initializeApp } from "firebase-admin/app";
+import { setGlobalOptions } from "firebase-functions";
+import { onRequest } from "firebase-functions/v2/https";
+import { onObjectFinalized, onObjectDeleted } from "firebase-functions/v2/storage";
+import { generateBundleLogic } from "./generateBundleLogic";
 
-import {setGlobalOptions} from "firebase-functions";
-import {onRequest} from "firebase-functions/https";
-import * as logger from "firebase-functions/logger";
+// Init Admin SDK with YOUR bucket
+initializeApp({
+  storageBucket: "polydoc-lib.firebasestorage.app",
+});
 
-// Start writing functions
-// https://firebase.google.com/docs/functions/typescript
-
-// For cost control, you can set the maximum number of containers that can be
-// running at the same time. This helps mitigate the impact of unexpected
-// traffic spikes by instead downgrading performance. This limit is a
-// per-function limit. You can override the limit for each function using the
-// `maxInstances` option in the function's options, e.g.
-// `onRequest({ maxInstances: 5 }, (req, res) => { ... })`.
-// NOTE: setGlobalOptions does not apply to functions using the v1 API. V1
-// functions should each use functions.runWith({ maxInstances: 10 }) instead.
-// In the v1 API, each function can only serve one request per container, so
-// this will be the maximum concurrent request count.
+// Global limits
 setGlobalOptions({ maxInstances: 10 });
 
-// export const helloWorld = onRequest((request, response) => {
-//   logger.info("Hello logs!", {structuredData: true});
-//   response.send("Hello from Firebase!");
-// });
+/** HTTP: Manually trigger bundle generation
+ *  GET /generateBundle?clinic=...&department=...
+ */
+export const generateBundle = onRequest({ region: "europe-west1" }, async (req, res) => {
+  const clinic = (req.query.clinic as string) || "";
+  const department = (req.query.department as string) || "";
+
+  if (!clinic || !department) {
+    res.status(400).send("Missing clinic or department parameters.");
+    return;
+  }
+
+  try {
+    console.log(`[HTTP] Generating bundle for ${clinic}/${department}`);
+    const path = await generateBundleLogic(clinic, department);
+    res.status(200).send(`bundle.json created at ${path}`);
+  } catch (e) {
+    console.error("[HTTP] Error generating bundle:", e);
+    res.status(500).send("Error generating bundle.json");
+  }
+});
+
+/** Storage Trigger: on upload → refresh bundle */
+export const autoGenerateBundle = onObjectFinalized(
+  {
+    bucket: "polydoc-lib.firebasestorage.app",
+    region: "europe-west1",
+  },
+  async (event) => {
+    const path = event.data.name ?? "";
+    const m = path.match(/^videos\/([^/]+)\/([^/]+)\//);
+    if (!m) return;
+
+    const [, clinic, department] = m;
+    console.log(`[UPLOAD] ${path} → updating bundle for ${clinic}/${department}`);
+    try {
+      await generateBundleLogic(clinic, department);
+      console.log(`[UPLOAD] Bundle updated for ${clinic}/${department}`);
+    } catch (e) {
+      console.error("[UPLOAD] Error updating bundle:", e);
+    }
+  }
+);
+
+/** Storage Trigger: on delete → refresh bundle */
+export const cleanupBundle = onObjectDeleted(
+  {
+    bucket: "polydoc-lib.firebasestorage.app",
+    region: "europe-west1",
+  },
+  async (event) => {
+    const path = event.data.name ?? "";
+    const m = path.match(/^videos\/([^/]+)\/([^/]+)\//);
+    if (!m) return;
+
+    const [, clinic, department] = m;
+    console.log(`[DELETE] ${path} → cleaning bundle for ${clinic}/${department}`);
+    try {
+      await generateBundleLogic(clinic, department);
+      console.log(`[DELETE] Bundle cleaned for ${clinic}/${department}`);
+    } catch (e) {
+      console.error("[DELETE] Error cleaning bundle:", e);
+    }
+  }
+);
