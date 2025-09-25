@@ -1,4 +1,4 @@
-import { getStorage } from "firebase-admin/storage";
+import {getStorage} from "firebase-admin/storage";
 
 interface Bundle {
   version: string;
@@ -23,7 +23,7 @@ export async function generateBundleLogic(
 ): Promise<string> {
   const bucket = getStorage().bucket();
   const prefix = `videos/${clinic}/${department}/`;
-  const [files] = await bucket.getFiles({ prefix });
+  const [files] = await bucket.getFiles({prefix});
 
   const videoMap = new Map<string, Map<string, { videoPath: string; subtitlePath: string }>>();
 
@@ -45,7 +45,7 @@ export async function generateBundleLogic(
     if (!videoMap.has(videoId)) videoMap.set(videoId, new Map());
     const langMap = videoMap.get(videoId)!;
 
-    if (!langMap.has(lang)) langMap.set(lang, { videoPath: "", subtitlePath: "" });
+    if (!langMap.has(lang)) langMap.set(lang, {videoPath: "", subtitlePath: ""});
     const langEntry = langMap.get(lang)!;
 
     if (ext === "mp4") langEntry.videoPath = filePath;
@@ -61,10 +61,10 @@ export async function generateBundleLogic(
         subtitlePath: paths.subtitlePath,
       };
     }
-    videos.push({ id: videoId, title: videoId, languages });
+    videos.push({id: videoId, title: videoId, languages});
   }
 
-  const bundle: Bundle = { version: "1.0", clinic, department, videos };
+  const bundle: Bundle = {version: "1.0", clinic, department, videos};
   const bundleJson = JSON.stringify(bundle, null, 2);
   const bundlePath = `bundles/${clinic}/${department}/bundle.json`;
 

@@ -1,78 +1,138 @@
+/**
+ * Firebase Cloud Functions for PolyDoc Library.
+ * Handles bundle generation for video content based on storage events and HTTP requests.
+ * 
+ * Configuration is centralized in config.ts for modularity and environment-specific settings.
+ */
+
 import { initializeApp } from "firebase-admin/app";
-import { setGlobalOptions } from "firebase-functions";
+import { setGlobalOptions } from "firebase-functions/v2";
 import { onRequest } from "firebase-functions/v2/https";
 import { onObjectFinalized, onObjectDeleted } from "firebase-functions/v2/storage";
 import { generateBundleLogic } from "./generateBundleLogic";
+import { STORAGE_BUCKET, REGION, MAX_INSTANCES } from "./config";
 
-// Init Admin SDK with YOUR bucket
+// Initialize Firebase Admin SDK with the configured storage bucket.
+// This ensures all storage operations use the correct bucket across environments.
 initializeApp({
-  storageBucket: "polydoc-lib.firebasestorage.app",
+  storageBucket: STORAGE_BUCKET,
 });
 
-// Global limits
-setGlobalOptions({ maxInstances: 10 });
+// Set global options for function instances to control scaling and resource usage.
+// Limits the maximum number of concurrent instances to prevent excessive costs.
+setGlobalOptions({ maxInstances: MAX_INSTANCES });
 
-/** HTTP: Manually trigger bundle generation
- *  GET /generateBundle?clinic=...&department=...
+/**
+ * HTTP endpoint to manually trigger bundle generation for a specific clinic and department.
+ * 
+ * @param {import('firebase-functions/v2/https').Request} req - Express request object.
+ * @param {import('express').Response} res - Express response object.
+ * 
+ * Query parameters:
+ * - clinic: string - The clinic identifier.
+ * - department: string - The department identifier.
+ * 
+ * @returns {Promise<void>} Sends a success or error response.
  */
-export const generateBundle = onRequest({ region: "europe-west1" }, async (req, res) => {
+export const generateBundle = onRequest({ region: REGION }, async (req, res) => {
+  // Extract query parameters with fallback to empty string.
   const clinic = (req.query.clinic as string) || "";
   const department = (req.query.department as string) || "";
 
+  // Validate required parameters.
   if (!clinic || !department) {
     res.status(400).send("Missing clinic or department parameters.");
     return;
   }
 
   try {
+    // Log the operation for monitoring.
     console.log(`[HTTP] Generating bundle for ${clinic}/${department}`);
+    
+    // Generate the bundle and get the path.
     const path = await generateBundleLogic(clinic, department);
+    
+    // Respond with success.
     res.status(200).send(`bundle.json created at ${path}`);
   } catch (e) {
+    // Log errors for debugging.
     console.error("[HTTP] Error generating bundle:", e);
+    
+    // Respond with error.
     res.status(500).send("Error generating bundle.json");
   }
 });
 
-/** Storage Trigger: on upload → refresh bundle */
+/**
+ * Storage trigger that automatically regenerates the bundle when a video or subtitle file is uploaded.
+ * 
+ * @param {import('firebase-functions/v2/storage').CloudEvent<import('firebase-functions/v2/storage').StorageObjectData>} event - Storage event data.
+ * @returns {Promise<void>} Completes when bundle is updated or error is logged.
+ */
 export const autoGenerateBundle = onObjectFinalized(
   {
-    bucket: "polydoc-lib.firebasestorage.app",
-    region: "europe-west1",
+    bucket: STORAGE_BUCKET,
+    region: REGION,
   },
   async (event) => {
+    // Extract the file path from the event.
     const path = event.data.name ?? "";
+    
+    // Parse clinic and department from the path using regex.
     const m = path.match(/^videos\/([^/]+)\/([^/]+)\//);
-    if (!m) return;
+    if (!m) return; // Ignore files not matching the expected structure.
 
     const [, clinic, department] = m;
+    
+    // Log the trigger for monitoring.
     console.log(`[UPLOAD] ${path} → updating bundle for ${clinic}/${department}`);
+    
     try {
+      // Regenerate the bundle.
       await generateBundleLogic(clinic, department);
+      
+      // Confirm success.
       console.log(`[UPLOAD] Bundle updated for ${clinic}/${department}`);
     } catch (e) {
+      // Log errors without failing the function.
       console.error("[UPLOAD] Error updating bundle:", e);
     }
   }
 );
 
-/** Storage Trigger: on delete → refresh bundle */
+/**
+ * Storage trigger that regenerates the bundle when a video or subtitle file is deleted.
+ * This ensures the bundle remains accurate after deletions.
+ * 
+ * @param {import('firebase-functions/v2/storage').CloudEvent<import('firebase-functions/v2/storage').StorageObjectData>} event - Storage event data.
+ * @returns {Promise<void>} Completes when bundle is cleaned or error is logged.
+ */
 export const cleanupBundle = onObjectDeleted(
   {
-    bucket: "polydoc-lib.firebasestorage.app",
-    region: "europe-west1",
+    bucket: STORAGE_BUCKET,
+    region: REGION,
   },
   async (event) => {
+    // Extract the file path from the event.
     const path = event.data.name ?? "";
+    
+    // Parse clinic and department from the path using regex.
     const m = path.match(/^videos\/([^/]+)\/([^/]+)\//);
-    if (!m) return;
+    if (!m) return; // Ignore files not matching the expected structure.
 
     const [, clinic, department] = m;
+    
+    // Log the trigger for monitoring.
     console.log(`[DELETE] ${path} → cleaning bundle for ${clinic}/${department}`);
+    
     try {
+      // Regenerate the bundle to reflect deletions.
       await generateBundleLogic(clinic, department);
+      
+      // Confirm success.
       console.log(`[DELETE] Bundle cleaned for ${clinic}/${department}`);
     } catch (e) {
+      // Log errors without failing the function.
       console.error("[DELETE] Error cleaning bundle:", e);
     }
   }
