@@ -10,6 +10,7 @@ import { setGlobalOptions } from "firebase-functions/v2";
 import { onRequest } from "firebase-functions/v2/https";
 import { onObjectFinalized, onObjectDeleted } from "firebase-functions/v2/storage";
 import { generateBundleLogic } from "./generateBundleLogic";
+import { createLanguageFolders as createLanguageFoldersUtil } from "./languageFolderUtils";
 import { STORAGE_BUCKET, REGION, MAX_INSTANCES } from "./config";
 
 // Initialize Firebase Admin SDK with the configured storage bucket.
@@ -17,6 +18,27 @@ import { STORAGE_BUCKET, REGION, MAX_INSTANCES } from "./config";
 initializeApp({
   storageBucket: STORAGE_BUCKET,
 });
+
+// Define supported languages for folder creation (ISO 639-1 codes)
+// Matches workspace folders in the attachment: ar, chn, cze, de, en, esp, fr, hrv, hu, it, pl, ro, rus, sk, tr, ukr
+const SUPPORTED_LANGUAGES = [
+  'ar', // Arabic
+  'zh', // Chinese (maps from 'chn')
+  'cs', // Czech (maps from 'cze')
+  'de', // German
+  'en', // English
+  'es', // Spanish (maps from 'esp')
+  'fr', // French
+  'hr', // Croatian (maps from 'hrv')
+  'hu', // Hungarian
+  'it', // Italian
+  'pl', // Polish
+  'ro', // Romanian
+  'ru', // Russian (maps from 'rus')
+  'sk', // Slovak
+  'tr', // Turkish
+  'uk', // Ukrainian (maps from 'ukr')
+];
 
 // Set global options for function instances to control scaling and resource usage.
 // Limits the maximum number of concurrent instances to prevent excessive costs.
@@ -134,6 +156,44 @@ export const cleanupBundle = onObjectDeleted(
     } catch (e) {
       // Log errors without failing the function.
       console.error("[DELETE] Error cleaning bundle:", e);
+    }
+  }
+);
+
+/**
+ * Storage trigger that creates language folders when a new video path is detected.
+ * This ensures language subfolders are available for new videos.
+ * 
+ * @param {import('firebase-functions/v2/storage').CloudEvent<import('firebase-functions/v2/storage').StorageObjectData>} event - Storage event data.
+ * @returns {Promise<void>} Completes when folders are created or error is logged.
+ */
+export const createLanguageFolders = onObjectFinalized(
+  {
+    bucket: STORAGE_BUCKET,
+    region: REGION,
+  },
+  async (event) => {
+    // Extract the file path from the event.
+    const path = event.data.name ?? "";
+    
+    // Parse clinic, department, and video name from the path using regex.
+    const m = path.match(/^videos\/([^/]+)\/([^/]+)\/([^/]+)\//);
+    if (!m) return; // Ignore files not matching the expected structure.
+
+    const [, clinic, department, videoName] = m;
+    
+    // Log the trigger for monitoring.
+    console.log(`[LANGUAGE FOLDERS] ${path} → creating folders for ${clinic}/${department}/${videoName}`);
+    
+    // Call the utility function to create language folders if needed.
+    try {
+      await createLanguageFoldersUtil(clinic, department, videoName, SUPPORTED_LANGUAGES);
+      
+      // Confirm success.
+      console.log(`[LANGUAGE FOLDERS] Folders created for ${clinic}/${department}/${videoName}`);
+    } catch (e) {
+      // Log errors without failing the function.
+      console.error("[LANGUAGE FOLDERS] Error creating folders:", e);
     }
   }
 );
